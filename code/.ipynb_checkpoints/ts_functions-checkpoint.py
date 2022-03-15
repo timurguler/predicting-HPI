@@ -128,6 +128,55 @@ def evaluate_model(results_df, method='square'):
     # return all three metrics
     return pd.concat([win_rate.to_frame('win'), avg_mse.to_frame('mse'), avg_improvement.to_frame('improvement'), AIC, pvals], axis=1)
 
+def evaluate_model2(results_df, method='square'):
+    
+    # calculate differences, improvements, and win boolean
+    results_df = results_df.assign(diff_1=(results_df.pred_1-results_df.hpi)/results_df.hpi,
+                    diff_4=(results_df.pred_4-results_df.hpi)/results_df.hpi,
+                    diff_1_naive=(results_df.naive_1-results_df.hpi)/results_df.hpi,
+                    diff_4_naive=(results_df.naive_4-results_df.hpi)/results_df.hpi)
+
+    results_df = results_df.assign(improve_1 = results_df.diff_1_naive.apply(np.abs) - results_df.diff_1.apply(np.abs),
+                    improve_4 = results_df.diff_4_naive.apply(np.abs) - results_df.diff_4.apply(np.abs))
+
+    results_df = results_df.assign(win_1 = results_df.improve_1 > 0,
+                    win_4 = results_df.improve_4 > 0)
+
+    # list of difference columns
+    diff_cols = [col for col in results_df.columns if 'diff' in col]                               
+
+    # use square difference
+    results_pos = results_df.copy()
+    if method == 'square':
+        results_pos[diff_cols] = np.sqrt(results_pos[diff_cols] ** 2)
+
+    elif method == 'abs':
+        results_pos[diff_cols] = np.abs(results_pos[diff_cols])
+
+    else:
+        raise ValueError('Choose a valid method for evaluation.')
+
+    # calculate mse by city and lag value, caulculate winners
+    mses = results_pos.groupby(['city', 'p', 'd', 'q'])[diff_cols].mean().reset_index()
+
+    mses['improve_1'] = (mses.diff_1_naive - mses.diff_1)/mses.diff_1_naive
+    mses['improve_4'] = (mses.diff_4_naive - mses.diff_4)/mses.diff_4_naive
+
+    mses = mses.rename(columns={'diff_1' : 'pct_error_1', 'diff_4' : 'pct_error_4'}).drop(columns=[col for col in mses.columns if 'naive' in col])
+    mses = mses.set_index(['city', 'p', 'd', 'q'])
+    
+    # best lag by win rate
+    win_cols = [col for col in results_df.columns if 'win' in col]
+    win_rate = results_df.dropna().groupby(['city', 'p', 'd', 'q'])[win_cols].sum()/results_df.dropna().groupby(['city', 'p', 'd', 'q'])[win_cols].count()
+    
+    
+    # best AIC
+    AIC = results_df.groupby(['city', 'p', 'd', 'q']).AIC.mean().to_frame('AIC')
+    
+    # return all three metrics
+    return pd.concat([win_rate, mses, AIC], axis=1)
+
+
 def ARIMA_best_hypers(modeling_results, eval_results):
     '''
     GOAL - select the best hyperparameters balancing four selection criteria (win rate, AIC, improvement over naive, mse)
@@ -152,3 +201,29 @@ def ARIMA_best_hypers(modeling_results, eval_results):
     best_results = modeling_results.merge(best_pdq, on=['city', 'p', 'd', 'q'], how='inner', validate='many_to_one')
     
     return best_results
+
+def ARIMA_best_hypers2(modeling_results, eval_results):
+    '''
+    GOAL - select the best hyperparameters balancing four selection criteria (win rate, AIC, improvement over naive, mse)
+    INPUT - model output values, results from "evaluate_model" function
+    OUTPUT - dataframe of results with best PDQ from each city
+    '''
+    
+    results_normed = eval_results.groupby(['city']).transform(lambda x : (x - x.mean()) / x.std())
+    
+    # convert "negative" metrics
+    low_cols = ['pct_error_1', 'pct_error_4', 'AIC']
+    results_normed[low_cols] = -results_normed[low_cols]
+    
+    # aggregate scores
+    agg_scores = results_normed.sum(axis=1).to_frame('agg_score').reset_index()
+    
+    # get best hypers (max agg score for each city)
+    agg_scores = agg_scores.merge(agg_scores.groupby(['city']).agg_score.max(), on='city', how='inner')
+    best_pdq = agg_scores[agg_scores.agg_score_x == agg_scores.agg_score_y].drop(columns = ['agg_score_x', 'agg_score_y'])
+    
+    # filter model results for best hypers
+    best_hypers = eval_results.merge(best_pdq, on=['city', 'p', 'd', 'q'], how='inner', validate='many_to_one')
+    best_results = modeling_results.merge(best_pdq, on=['city', 'p', 'd', 'q'], how='inner', validate='many_to_one')
+    
+    return best_hypers, best_results

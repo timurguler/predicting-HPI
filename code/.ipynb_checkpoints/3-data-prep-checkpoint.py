@@ -89,9 +89,9 @@ msa_data_dict = fred_msa.combine_series(msa_data_dict, 'hpi', 'hpi-large')
 # STEP 3 - LINK HPI TO MEDIAN HOUSING PRICE
 ##########
 
-# get median listing price at start of 2020
-med_prices_2020 = msa_data_dict['median_listing_price']['data'].query(
-    "date=='2020-01-01'").drop(columns=['date', 'year', 'month', 'quarter']).reset_index(drop=True)
+# get median listing end of 2019
+med_prices_2019 = msa_data_dict['median_listing_price']['data'].query(
+    "date=='2019-10-01'").drop(columns=['date', 'year', 'month', 'quarter']).reset_index(drop=True)
 
 # remove listing price from dictionary (no longer needed)
 del msa_data_dict['median_listing_price']
@@ -101,18 +101,18 @@ la_med_listing_id = 'MEDLISPRI6037'
 
 api_key = 'a37b50cd27afbc3ce23a81ddc5541dec'
 
-la_2020_med_price = float(fred_msa.get_series(la_med_listing_id, api_key).query("date=='2020-01-01'").value)
+la_2019_med_price = float(fred_msa.get_series(la_med_listing_id, api_key).query("date=='2019-10-01'").value)
 
-med_prices_2020 = med_prices_2020.append({'city' : 'Los Angeles',
+med_prices_2019 = med_prices_2019.append({'city' : 'Los Angeles',
                        'msa_state' : 'CA',
-                       'median_listing_price' : la_2020_med_price}, ignore_index=True)
+                       'median_listing_price' : la_2019_med_price}, ignore_index=True)
 
-# create HPI multiplier to compare between cities, based on median in Q1 2020
-med_prices_2020['multiplier'] = med_prices_2020.median_listing_price/np.median(med_prices_2020.median_listing_price)
+# create HPI multiplier to compare between cities, based on median in Q4 2019
+med_prices_2019['multiplier'] = med_prices_2019.median_listing_price/np.median(med_prices_2019.median_listing_price)
 
 # use merge to add multiplier to HPI dataset
 msa_data_dict['hpi']['data'] = pd.merge(
-    msa_data_dict['hpi']['data'], med_prices_2020.drop(
+    msa_data_dict['hpi']['data'], med_prices_2019.drop(
     columns=['median_listing_price']), how='left', on=['city', 'msa_state'], validate='many_to_one')
 
 # calculate adjusted HPI
@@ -164,11 +164,15 @@ for k, v in county_data_dict.items():
     v['data'] = aggregated
 
 ##########
-# STEP 5 - CREATE AND SAVE UNIFIED DF
+# STEP 5 - CREATE UNIFIED DF, MAKE SELECT COLUMNS PER CAPITA, SAVE
 ##########
 
 combined_data_dict = msa_data_dict | county_data_dict
 
 hpi_data = fred_msa.convert_data_to_df(combined_data_dict, msa_id_vars, 'hpi')
+
+percap_cols = ['gdp', 'crimes', 'patents', 'private_establishments', 'snap']
+
+hpi_data[percap_cols] = hpi_data[percap_cols].divide(hpi_data.population, axis=0)
 
 hpi_data.to_csv('..\\working-data\\hpi-data.csv', index=False)
